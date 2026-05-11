@@ -11,17 +11,31 @@ export default function LoginPage() {
   const { login } = useAuth()
   const navigate = useNavigate()
 
-  async function handleSubmit(e: FormEvent) {
+async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    
+    // 1. Frontend Format Check (Stops the blue screen!)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setError("Please enter a valid email address (e.g., name@domain.com)");
+      return;
+    }
+
     if (!email || !password) { setError('Please fill in all fields'); return }
+    
     try {
       setError('')
       setLoading(true)
       await login(email, password)
       navigate('/dashboard')
-    } catch (err: unknown) {
-      const ae = err as { response?: { data?: { error?: string } } }
-      setError(ae.response?.data?.error ?? 'Invalid email or password')
+    } catch (err: any) {
+      // 2. Safe Error Catching (Prevents React crashes)
+      const detail = err.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        setError(detail[0].msg || 'Invalid format');
+      } else {
+        setError(typeof detail === 'string' ? detail : 'Invalid email or password');
+      }
     } finally {
       setLoading(false)
     }

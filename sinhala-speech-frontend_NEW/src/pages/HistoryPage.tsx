@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '../context/AuthContext'
 import api from '../api'
 import PageHeader from '../components/PageHeader'
 import ScoreRing from '../components/ScoreRing'
@@ -44,30 +45,29 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
 
 export default function HistoryPage() {
   const [data, setData] = useState<ProgressData | null>(null)
+  const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'great' | 'ok' | 'poor'>('all')
 
-  useEffect(() => {
-    api.get<ProgressData>('/speech/progress')
-      .then(r => setData(r.data))
-      .catch(() => {
-        setData({
-          progress: { best_score: 0.88, avg_score: 0.70, total_sessions: 8 },
-          history: [
-            { exercise_title: 'ආයුබෝවන්', score: 0.88, created_at: new Date().toISOString(), difficulty: 'easy' },
-            { exercise_title: 'ස්තූතියි', score: 0.72, created_at: new Date(Date.now() - 86400000).toISOString(), difficulty: 'medium' },
-            { exercise_title: 'කෝප්ප', score: 0.55, created_at: new Date(Date.now() - 172800000).toISOString(), difficulty: 'easy' },
-            { exercise_title: 'ශ්‍රී ලංකාව', score: 0.41, created_at: new Date(Date.now() - 259200000).toISOString(), difficulty: 'hard' },
-            { exercise_title: 'ගෙදර', score: 0.80, created_at: new Date(Date.now() - 345600000).toISOString(), difficulty: 'easy' },
-            { exercise_title: 'රෝහල', score: 0.65, created_at: new Date(Date.now() - 432000000).toISOString(), difficulty: 'medium' },
-            { exercise_title: 'පාසල', score: 0.78, created_at: new Date(Date.now() - 518400000).toISOString(), difficulty: 'easy' },
-            { exercise_title: 'ව්‍යාකරණ', score: 0.33, created_at: new Date(Date.now() - 604800000).toISOString(), difficulty: 'hard' },
-          ],
-        })
+useEffect(() => {
+    // 1. Check if we have a user email
+    const userEmail = user?.email || 'test@example.com';
+
+    // 2. Fetch real data from your SQLite Database via FastAPI
+    api.get(`/speech/progress?user_email=${userEmail}`)
+      .then(res => {
+        // The backend returns exactly what the History page needs
+        setData(res.data);
       })
-      .finally(() => setLoading(false))
-  }, [])
+      .catch(err => {
+        console.error("Error fetching history data:", err);
+        setData({ progress: null, history: [] });
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [user]); // Re-run if the logged-in user changes
 
   const sessions = data?.history ?? []
 

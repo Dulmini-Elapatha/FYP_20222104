@@ -1,4 +1,3 @@
-
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
@@ -23,17 +22,28 @@ export default function SignupPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
+    
+    // 1. Validate Email Format strictly (Frontend check)
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      setError("Please enter a valid email address (e.g., name@domain.com)");
+      return;
+    }
+
     if (!name || !email || !password || !confirm) { setError('Please fill in all fields'); return }
     if (password !== confirm) { setError('Passwords do not match'); return }
     if (!reqs.every(r => r.met)) { setError('Password must meet all requirements'); return }
+    
     try {
       setError('')
       setLoading(true)
+      // 2. Call the REAL backend through AuthContext
       await signup(email, password, name)
       navigate('/dashboard')
     } catch (err: unknown) {
-      const ae = err as { response?: { data?: { error?: string } } }
-      setError(ae.response?.data?.error ?? 'Failed to create account')
+      const ae = err as { response?: { data?: { detail?: string } } }
+      // Display the FastAPI backend error (e.g., "Email already registered")
+      setError(ae.response?.data?.detail ?? 'Failed to create account')
     } finally {
       setLoading(false)
     }

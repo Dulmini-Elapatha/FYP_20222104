@@ -39,30 +39,33 @@ export default function DashboardPage() {
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    api.get<ProgressData>('/speech/progress')
-      .then(r => setProgress(r.data))
-      .catch(() => {
-        // Use mock data if backend not ready
-        setProgress({
-          progress: { best_score: 0.85, avg_score: 0.67, total_sessions: 12 },
-          history: [
-            { exercise_title: 'ආයුබෝවන්', score: 0.85, created_at: new Date().toISOString() },
-            { exercise_title: 'ස්තූතියි', score: 0.70, created_at: new Date(Date.now() - 86400000).toISOString() },
-            { exercise_title: 'කෝප්ප', score: 0.55, created_at: new Date(Date.now() - 172800000).toISOString() },
-          ],
-        })
-      })
-      .finally(() => setLoading(false))
-  }, [])
+useEffect(() => {
+    // 1. Check if we have a user email to fetch data for
+    const userEmail = user?.email || 'test@example.com';
 
-  const chartData = [...(progress?.history ?? [])]
-    .reverse()
-    .slice(0, 10)
+    // 2. Fetch real data from your SQLite Database via FastAPI
+    api.get<ProgressData>(`/speech/progress?user_email=${userEmail}`)
+      .then(res => {
+        // The backend already calculated the best_score, avg_score, and sorted the history!
+        setProgress(res.data);
+      })
+      .catch(err => {
+        console.error("Error fetching dashboard data:", err);
+        // Fallback to empty state if the server is down or user is brand new
+        setProgress({ progress: null, history: [] });
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [user]); // Re-run if the logged-in user changes
+
+const chartData = [...(progress?.history ?? [])]
+    .slice(0, 10) // Take the 10 most recent
+    .reverse()    // Reverse them so the oldest is on the left of the chart
     .map((s, i) => ({
       session: `S${i + 1}`,
       score: s.score,
-    }))
+    }));
 
   const greetingHour = new Date().getHours()
   const greeting = greetingHour < 12 ? 'Good morning' : greetingHour < 17 ? 'Good afternoon' : 'Good evening'

@@ -1,4 +1,5 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react' // <-- Added useEffect here
+import { useAuth } from '../context/AuthContext'
 import api from '../api'
 import ScoreRing from '../components/ScoreRing'
 import PageHeader from '../components/PageHeader'
@@ -18,6 +19,8 @@ interface AnalysisResult {
   exercise: Exercise
   reward?: number
   feedback?: string
+  heard_text?: string
+  attempted_target?: string
 }
 
 const DIFFICULTY_COLOR: Record<string, string> = {
@@ -53,14 +56,82 @@ function WaveformBars({ active }: { active: boolean }) {
   )
 }
 
+function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+  
+  const result = new Float32Array(buffer.length * numChannels);
+  if (numChannels === 2) {
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+    for (let i = 0; i < buffer.length; i++) {
+      result[i * 2] = left[i];
+      result[i * 2 + 1] = right[i];
+    }
+  } else {
+    result.set(buffer.getChannelData(0));
+  }
+
+  const dataLength = result.length * (bitDepth / 8);
+  const bufferLength = 44 + dataLength;
+  const arrayBuffer = new ArrayBuffer(bufferLength);
+  const view = new DataView(arrayBuffer);
+
+  const writeString = (offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
+  view.setUint16(32, numChannels * (bitDepth / 8), true);
+  view.setUint16(34, bitDepth, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < result.length; i++) {
+    let s = Math.max(-1, Math.min(1, result[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
+
 export default function PracticePage() {
   const [recording, setRecording] = useState(false)
+  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState('')
   const [practiced, setPracticed] = useState(0)
   const mediaRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+
+  // CLEANUP: Removed LocalStorage reads. Default strictly to Level 1.
+  const [currentLevel, setCurrentLevel] = useState(1);
+  const [currentWord, setCurrentWord] = useState("මම");
+  const [targetPhonemes, setTargetPhonemes] = useState("ma ma");
+
+  // NEW: Watch for user changes and reset the room securely!
+  useEffect(() => {
+    setCurrentLevel(1);
+    setCurrentWord("මම");
+    setTargetPhonemes("ma ma");
+    setResult(null); 
+    setPracticed(0); 
+  }, [user?.email]);
 
   async function startRecording() {
     setError('')
@@ -70,11 +141,25 @@ export default function PracticePage() {
       const recorder = new MediaRecorder(stream)
       chunksRef.current = []
       recorder.ondataavailable = (e) => chunksRef.current.push(e.data)
+      
       recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        await sendAudio(blob)
-        stream.getTracks().forEach(t => t.stop())
+        try {
+          const webmBlob = new Blob(chunksRef.current, { type: 'audio/webm' })
+          const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const arrayBuffer = await webmBlob.arrayBuffer();
+          const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+          const trueWavBlob = audioBufferToWavBlob(audioBuffer);
+          
+          await sendAudio(trueWavBlob)
+        } catch (err) {
+          console.error("Audio Conversion Error:", err)
+          setError("Audio too short or unreadable. Please try speaking a bit longer.")
+          setLoading(false)
+        } finally {
+          stream.getTracks().forEach(t => t.stop())
+        }
       }
+      
       mediaRef.current = recorder
       recorder.start()
       setRecording(true)
@@ -90,18 +175,46 @@ export default function PracticePage() {
   }
 
   async function sendAudio(blob: Blob) {
+    const attemptedPhonemes = targetPhonemes;
+    const attemptedWord = currentWord;
+
     try {
-      const form = new FormData()
-      form.append('audio', blob, 'recording.webm')
-      const res = await api.post<AnalysisResult>('/speech/analyze', form, {
+      const form = new FormData();
+      form.append('audio_file', blob, 'recording.wav');
+      form.append('current_level', currentLevel.toString());
+      form.append('target_phonemes', attemptedPhonemes);
+      form.append('user_email', user?.email || 'test@example.com')
+      form.append('attempted_word', currentWord)
+
+      const res = await api.post<any>('/process_turn', form, {
         headers: { 'Content-Type': 'multipart/form-data' },
-      })
-      setResult(res.data)
-      setPracticed(p => p + 1)
-    } catch {
-      setError('Analysis failed. Make sure the backend server is running.')
+      });
+
+      // CLEANUP: Removed LocalStorage writing! The backend saves it to SQLite now.
+
+      setResult({
+        score: res.data.previous_score,
+        exercise: {
+          word: res.data.next_word_to_show,
+          translation: `Level ${res.data.new_level} Challenge`,
+          difficulty: res.data.new_level <= 2 ? 'easy' : res.data.new_level <= 4 ? 'medium' : 'hard',
+          phonetic: res.data.next_target_phonemes
+        },
+        reward: res.data.ai_action_taken === 2 ? 1 : res.data.ai_action_taken === 0 ? -1 : 0,
+        heard_text: res.data.heard_text,
+        attempted_target: attemptedPhonemes
+      });
+
+      setCurrentLevel(res.data.new_level);
+      setTargetPhonemes(res.data.next_target_phonemes);
+      setCurrentWord(res.data.next_word_to_show);
+      setPracticed(p => p + 1);
+
+    } catch (err) {
+      console.error("API Error:", err);
+      setError('Analysis failed. Make sure the backend server is running.');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
@@ -125,7 +238,12 @@ export default function PracticePage() {
         {/* Recording panel */}
         <div className="card p-8 flex flex-col items-center text-center animate-fade-up">
           <h2 className="font-display font-semibold text-white mb-1">Record Pronunciation</h2>
-          <p className="text-white/40 text-sm mb-8">Press the mic, speak a Sinhala word clearly, then press stop</p>
+          <p className="text-white/40 text-sm mb-6">Press the mic, speak clearly, then press stop</p>
+
+          <div className="mb-8 p-6 w-full rounded-2xl bg-white/5 border border-white/10 shadow-inner">
+            <p className="text-sm text-teal-400 font-semibold mb-2 uppercase tracking-widest">Please Say:</p>
+            <p className="text-5xl font-display font-bold text-white">{currentWord}</p>
+          </div>
 
           {error && (
             <div className="mb-6 p-3 rounded-xl bg-red-500/10 border border-red-500/20 w-full">
@@ -195,6 +313,7 @@ export default function PracticePage() {
               <div className="card p-6 animate-fade-up">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-display font-semibold text-white">Your Result</h3>
+                  
                   <button onClick={reset} className="flex items-center gap-1.5 text-xs text-white/40 hover:text-white transition-colors">
                     <RotateCcw className="w-3 h-3" /> New recording
                   </button>
@@ -205,9 +324,16 @@ export default function PracticePage() {
                     <p className={`text-lg font-display font-bold ${scoreFeedback(result.score).color}`}>
                       {scoreFeedback(result.score).text}
                     </p>
-                    <p className="text-white/40 text-sm">{scoreFeedback(result.score).sub}</p>
+                    <p className="text-white/40 text-sm mb-1">{scoreFeedback(result.score).sub}</p>
+                    
+                    {/* NEW: THE DIAGNOSTIC BOX IS HERE */}
+                    <div className="mt-3 mb-2 p-2.5 rounded-lg bg-black/20 border border-white/5 text-xs font-mono shadow-inner">
+                      <p className="text-white/50">🎯 Target: /{result.attempted_target}/</p>
+                      <p className="text-amber-400 mt-1">🤖 Heard:  /{result.heard_text || 'Nothing heard'}/</p>
+                    </div>
+
                     {result.reward !== undefined && (
-                      <div className={`inline-flex items-center gap-1 mt-2 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                      <div className={`inline-flex items-center gap-1 mt-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
                         result.reward > 0 ? 'bg-teal-500/20 text-teal-400' : 'bg-red-500/20 text-red-400'
                       }`}>
                         {result.reward > 0 ? '↑' : '↓'} RL Reward: {result.reward > 0 ? '+' : ''}{result.reward}

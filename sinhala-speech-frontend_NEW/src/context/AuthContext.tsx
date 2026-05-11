@@ -1,7 +1,5 @@
-// 
-
-
 import { createContext, useContext, useState, ReactNode } from 'react'
+import api from '../api' // Make sure this points to your axios instance
 
 interface User {
   name: string
@@ -18,31 +16,37 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Check localStorage for persisted mock user
+  // Check localStorage for persisted user
   const [user, setUser] = useState<User | null>(() => {
-    const stored = localStorage.getItem('mock_user')
+    const stored = localStorage.getItem('app_user')
     return stored ? JSON.parse(stored) : null
   })
 
   async function signup(email: string, password: string, name: string) {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 800))
-    const newUser = { name, email }
-    localStorage.setItem('mock_user', JSON.stringify(newUser))
+    // Send JSON data to your FastAPI /auth/register endpoint
+    const res = await api.post('/auth/register', { name, email, password })
+    
+    const newUser = { name, email: res.data.email }
+    localStorage.setItem('app_user', JSON.stringify(newUser))
     setUser(newUser)
   }
 
   async function login(email: string, password: string) {
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 800))
-    // Accept any credentials for testing
-    const mockUser = { name: 'Test User', email }
-    localStorage.setItem('mock_user', JSON.stringify(mockUser))
-    setUser(mockUser)
+    // Send JSON data to your FastAPI /auth/login endpoint
+    const res = await api.post('/auth/login', { email, password })
+    
+    // We use the email prefix as a display name since login only requires email
+    const displayName = res.data.email.split('@')[0]
+    const loggedInUser = { name: displayName, email: res.data.email }
+    
+    localStorage.setItem('app_user', JSON.stringify(loggedInUser))
+    setUser(loggedInUser)
   }
 
   function logout() {
-    localStorage.removeItem('mock_user')
+    localStorage.removeItem('app_user')
+    // SECURE LOGOUT: Wipe previous user's dashboard history from the browser!
+    localStorage.removeItem('practice_history')
     setUser(null)
   }
 

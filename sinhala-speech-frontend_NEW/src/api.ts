@@ -1,10 +1,12 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: '/api',
-  headers: { 'Content-Type': 'application/json' },
+  // Point directly to your local FastAPI backend!
+  baseURL: 'http://127.0.0.1:8000', 
+  // We removed the JSON header here because FormData (audio files) needs to set its own special boundary headers automatically.
 })
 
+// Keep your interceptors exactly as they were
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) config.headers.Authorization = `Bearer ${token}`
